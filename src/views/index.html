@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>测试token续签</title>
+    <script src="https://cdn.bootcdn.net/ajax/libs/axios/1.5.0/axios.js"></script>
+    <style>
+      .login {
+        width: 500px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        flex-direction: column;
+      }
+      .label {
+        display: inline-block;
+        width: 50px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <a href="/#/note">笔记</a>
+    <script>
+      /**
+       * 1.响应拦截器中，根据响应结果来影响axios请求的Promise的状态，若是返回error实例、或Promise.reject则Promise的状态也为rejected，若为正常结果，则Promise的状态为fulfilled
+       * 2.根据1的特定，在401时，通过RT来刷新token获取AT，并保存
+       * 3.在响应拦截器错误回调中可以接收error参数，error.config为此次请求失败的请求头部
+       * 4.当我们刷新token后可以使用error.config来重新发送上次的请求。
+       * 5.若请求成功，返回即可，返回时其axios的Promise状态也会成功（就算401走了错误回调，但返回正常结果，其Promise状态也会成为fulfilled）
+       * */
+
+      const app = document.querySelector('#app')
+
+      // token操作
+      const Token = {
+        getAT() {
+          return localStorage.getItem('access_token')
+        },
+        setAT(token) {
+          localStorage.setItem('access_token', token)
+        },
+        getRT() {
+          return localStorage.getItem('refresh_token')
+        },
+        setRT(token) {
+          localStorage.setItem('refresh_token', token)
+        }
+      }
+
+      // axios实例
+      const http = axios.create({
+        baseURL: '/api'
+      })
+
+      // 刷新token
+      const refreshToken = (config) => {
+        return new Promise((resolve, reject) => {
+          API.refreshTokenAPI().then(
+            (result) => {
+              // 保存token
+              Token.setAT(result.data.data.access_token)
+              // 修改上次请求的authorization，因为上次的authorization是过期的需要重新赋值为最新的token
+              config.headers.authorization = 'Bearer ' + Token.getAT()
+              console.log(config)
+              // 重新发送请求
+              http(config).then(
+                (res) => {
+                  // 将此次请求的结果返回
+                  resolve(res)
+                },
+                (reason) => {
+                  // 此次请求的错误
+                  reject(reason)
+                }
+              )
+            },
+            (reason) => {
+              // 返回登录页
+              location.hash = '/login'
+              reject(reason)
+            }
+          )
+        })
+      }
+
+      // 请求拦截器
+      http.interceptors.request.use(
+        (config) => {
+          // 携带token
+          const token = Token.getAT()
+          if (token) {
+            config.headers.authorization = 'Bearer ' + token
+          }
+          return config
+        },
+        (error) => {
+          // Do something with response error
+          return Promise.reject(error)
+        }
+      )
+
+      // 响应拦截器
+      http.interceptors.response.use(
+        (response) => {
+          // Do something before response is sent
+          return response.data
+        },
+        (error) => {
+          // Do something with response error
+          if (error.response.status === 401) {
+            // 401错误
+            return refreshToken(error.config)
+          } else {
+            return Promise.reject(error)
+          }
+        }
+      )
+
+      // API
+      const API = {
+        loginAPI: (username, password) => {
+          return http.get(`/login?username=${username}&password=${password}`)
+        },
+        userInfoAPI: () => {
+          return http.get('/user/info')
+        },
+        // 刷新token时，不要用axios实例来发送，因为axios实例配置了
+        // 响应拦截器或请求拦截器，请求拦截器可能会自动携带旧的过期的token导致请求401，
+        // 而响应拦截器错误了又会继续走错误的回调，就会递归调用
+        // 最好实例axios来发送请求，而不是用实例来发送请求
+        refreshTokenAPI: () => {
+          const token = Token.getRT()
+          if (token) {
+            return axios.get('/api/refresh-token', {
+              headers: {
+                authorization: `Bearer ${token}`
+              }
+            })
+          } else {
+            return Promise.reject('没有refresh_token!')
+          }
+        }
+      }
+
+      // 路由表
+      const routes = [
+        {
+          path: '/login',
+          render() {
+            const handleClick = () => {
+              API.loginAPI(input_u.value, input_p.value).then(
+                (result) => {
+                  location.hash = '/'
+                  const res = result.data
+                  Token.setAT(res.access_token)
+                  Token.setRT(res.refresh_token)
+                },
+                (error) => {
+                  alert(error.response.data.msg)
+                }
+              )
+            }
+            // 元素
+            const login = document.createElement('div')
+            const h1 = document.createElement('h1')
+            const username = document.createElement('div')
+            const password = document.createElement('div')
+            const btn = document.createElement('button')
+            const span_u = document.createElement('span')
+            const span_p = document.createElement('span')
+            const input_u = document.createElement('input')
+            const input_p = document.createElement('input')
+            // 属性
+            input_p.type = 'password'
+            password.className = 'form-item'
+            username.className = 'form-item'
+            login.className = 'login'
+            span_p.className = 'label'
+            span_u.className = 'label'
+            h1.innerText = '登录'
+            span_p.innerText = '密码'
+            span_u.innerText = '用户名'
+            btn.innerText = '登录'
+            // 事件
+            btn.addEventListener('click', handleClick)
+            // 添加
+            login.append(h1)
+            username.append(span_u)
+            username.append(input_u)
+            login.append(username)
+            password.append(span_p)
+            password.append(input_p)
+            login.append(password)
+            login.append(btn)
+            return login
+          }
+        },
+        {
+          path: '/',
+          render() {
+            const box = document.createElement('div')
+            const button = document.createElement('button')
+            button.innerText = '获取用户信息'
+            const handleClick = () => {
+              API.userInfoAPI().then((result) => {
+                const div = document.createElement('div')
+                div.innerText = JSON.stringify(result.data)
+                box.append(div)
+              })
+            }
+            button.onclick = handleClick
+            box.append(button)
+            return box
+          }
+        },
+        {
+          path: '/note',
+          render() {
+            const box = document.createElement('div')
+            box.innerText = `
+        1.响应拦截器中，根据响应结果来影响axios请求的Promise的状态，若是返回error实例、或Promise.reject则Promise的状态也为rejected，若为正常结果，则Promise的状态为fulfilled
+        2.根据1的特定，在401时，通过RT来刷新token获取AT，并保存
+        3.在响应拦截器错误回调中可以接收error参数，error.config为此次请求失败的请求头部
+        4.当我们刷新token后可以使用error.config来重新发送上次的请求。
+        5.若请求成功，返回即可，返回时其axios的Promise状态也会成功（就算401走了错误回调，但返回正常结果，其Promise状态也会成为fulfilled）
+            `
+            return box
+          }
+        }
+      ]
+
+      // hash值更新的回调
+      const handleHashChange = () => {
+        const path = location.hash.substring(1)
+        const route = routes.find((item) => item.path === path)
+        if (route) {
+          app.innerHTML = ''
+          app.insertAdjacentElement('beforeEnd', route.render())
+        } else {
+          app.innerHTML = `
+            <h1>404</h1>
+            <h2>请求路径未找到</h2>
+          `
+        }
+      }
+
+      // hash值更新的回调
+      window.onhashchange = handleHashChange
+
+      // 初始化
+      if (Token.getAT()) {
+        // 登录了
+        location.hash = '/'
+      } else {
+        // 未登录
+        location.hash = '/login'
+      }
+
+      // 初始化根据路径渲染
+      handleHashChange()
+    </script>
+  </body>
+</html>
